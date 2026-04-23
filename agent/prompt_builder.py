@@ -327,6 +327,69 @@ PLATFORM_HINTS = {
     ),
 }
 
+# ---------------------------------------------------------------------------
+# Environment hints — execution-environment awareness for the agent.
+# Unlike PLATFORM_HINTS (which describe the messaging channel), these describe
+# the machine/OS the agent's tools actually run on.
+# ---------------------------------------------------------------------------
+
+
+def _workspace_boundary_hint() -> Optional[str]:
+    """Return the workspace-boundary hint when HERMES_WORKSPACE_DIR is bound
+    to a per-user `active` symlink (the multi-tenant fleet pattern).
+
+    The mount above `active-<agent>` exposes other users' directories at the
+    kernel level — software-level enforcement (this prompt + repo_finder.py)
+    is what keeps the agent honest. Tell the agent explicitly so it doesn't
+    wander when asked to "search the whole workspace".
+    """
+    ws_dir = os.environ.get("HERMES_WORKSPACE_DIR", "").rstrip("/")
+    if not ws_dir:
+        return None
+    basename = os.path.basename(ws_dir)
+    # Only fire when this is a multi-tenant deployment (active or active-<x>).
+    # Single-user installs (workspace_root = /workspaces or ~/hermes-workspaces)
+    # don't need the boundary warning.
+    if basename != "active" and not basename.startswith("active-"):
+        return None
+    return (
+        f"# Workspace boundary (strict)\n"
+        f"Your workspace root is `{ws_dir}`. This is a per-user view —\n"
+        f"the symlink target is whichever user is currently bound to this\n"
+        f"agent. The workspace root is the ONLY directory you may read,\n"
+        f"write, search, or `cd` into.\n"
+        f"\n"
+        f"Hard rules:\n"
+        f"- All file paths you produce or accept MUST be inside `{ws_dir}/`.\n"
+        f"- Never use `..` to walk above the workspace root.\n"
+        f"- Never use absolute paths outside `{ws_dir}/` (e.g. `/etc/...`,\n"
+        f"  `/opt/workspaces/<other-user>/...`, `/home/...`).\n"
+        f"- If a tool surface (terminal, search, find, ripgrep) lets you\n"
+        f"  reach paths outside the workspace, do not. The mount allows\n"
+        f"  it; you do not. Refuse the request and explain.\n"
+        f"- If the user asks you to read or list anything outside the\n"
+        f"  workspace, refuse politely: this is a shared playground,\n"
+        f"  other users' files are off-limits regardless of permissions.\n"
+        f"\n"
+        f"You may freely use any path under `{ws_dir}/` — that's your\n"
+        f"sandbox, including new files, subdirectories, and shell commands\n"
+        f"with `cwd=` inside it."
+    )
+
+
+def build_environment_hints() -> str:
+    """Return environment-specific guidance for the system prompt.
+
+    Returns an empty string when no special environment is detected.
+    """
+    hints: list[str] = []
+    boundary = _workspace_boundary_hint()
+    if boundary:
+        hints.append(boundary)
+    return "\n\n".join(hints)
+
+
+
 CONTEXT_FILE_MAX_CHARS = 20_000
 CONTEXT_TRUNCATE_HEAD_RATIO = 0.7
 CONTEXT_TRUNCATE_TAIL_RATIO = 0.2
